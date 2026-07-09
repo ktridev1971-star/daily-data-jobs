@@ -65,16 +65,20 @@ PRIORITY_GREENHOUSE = [
     "workiva", "yelp", "zillow", "zscaler",
 ]
 
-LEVER_SLUGS = [
-    # Fill in Lever-hosted data companies as you find them, e.g. "ro"
-    "attentive", "netflix", "epicgames", "eventbrite", "cedar",
+SMARTRECRUITERS_SLUGS = [
+    # "smartrecruiters" is SmartRecruiters' own careers board -- confirmed
+    # real via their public API docs, safe starting point. Add more by
+    # visiting https://jobs.smartrecruiters.com/<identifier> in a browser
+    # to confirm the identifier before adding it here.
+    "smartrecruiters",
 ]
 
-ASHBY_SLUGS = [
-    "openai", "anthropic", "notion", "perplexity", "ramp",
-    "posthog", "vercel", "retool", "supabase", "modal",
-    "sourcegraph", "cohere", "huggingface", "scale-ai",
-    "coreweave", "runway", "cursor", "replit", "chime", "robinhood",
+WORKABLE_SLUGS = [
+    # Add Workable-hosted company slugs here. Find one by visiting a
+    # company's careers page -- if it's Workable-hosted, the URL looks
+    # like https://apply.workable.com/<slug>/ or the page embeds a
+    # Workable widget referencing that same slug. Verify in a browser
+    # before adding, same as Greenhouse/SmartRecruiters slugs.
 ]
 
 WORKDAY_DIRECT = [
@@ -82,6 +86,8 @@ WORKDAY_DIRECT = [
     {"name": "Mastercard", "url": "https://mastercard.wd1.myworkdayjobs.com/CorporateCareers/jobs"},
     {"name": "PayPal", "url": "https://paypal.wd1.myworkdayjobs.com/jobs/jobs"},
     {"name": "CVS Health", "url": "https://cvshealth.wd1.myworkdayjobs.com/CVS_Health_Careers/jobs"},
+    {"name": "McKesson", "url": "https://mckesson.wd3.myworkdayjobs.com/External_Careers/jobs"},
+    {"name": "Nordstrom", "url": "https://nordstrom.wd501.myworkdayjobs.com/nordstrom_careers/jobs"},
 ]
 
 # Add blocked Workday career-board URLs here after testing them.
@@ -170,25 +176,40 @@ US_LOCATION_KEYWORDS = [
     "united states", "usa", "u.s.", "us remote", "remote us", "remote - us",
     "remote - united states", "remote, united states", "remote within the us",
     "remote within the united states", "united states remote",
-    "new york", "ny", "new jersey", "nj", "california", "ca", "washington", "wa",
-    "texas", "tx", "florida", "fl", "georgia", "ga", "illinois", "il",
-    "massachusetts", "ma", "virginia", "va", "north carolina", "nc",
-    "colorado", "co", "arizona", "az", "oregon", "or", "pennsylvania", "pa",
-    "connecticut", "ct", "maryland", "md", "ohio", "oh", "michigan", "mi",
-    "minnesota", "mn", "tennessee", "tn", "utah", "ut", "nevada", "nv",
-    "wisconsin", "wi", "south carolina", "sc", "alabama", "al", "alaska", "ak",
-    "arkansas", "ar", "delaware", "de", "hawaii", "hi", "idaho", "id",
-    "indiana", "in", "iowa", "ia", "kansas", "ks", "kentucky", "ky",
-    "louisiana", "la", "maine", "me", "mississippi", "ms", "missouri", "mo",
-    "montana", "mt", "nebraska", "ne", "new hampshire", "nh", "new mexico", "nm",
-    "north dakota", "nd", "oklahoma", "ok", "rhode island", "ri",
-    "south dakota", "sd", "vermont", "vt", "west virginia", "wv", "wyoming", "wy",
+    "new york", "new jersey", "california", "washington state",
+    "texas", "florida", "georgia", "illinois",
+    "massachusetts", "virginia", "north carolina",
+    "colorado", "arizona", "oregon", "pennsylvania",
+    "connecticut", "maryland", "ohio", "michigan",
+    "minnesota", "tennessee", "utah", "nevada",
+    "wisconsin", "south carolina", "alabama", "alaska",
+    "arkansas", "delaware", "hawaii", "idaho",
+    "indiana", "iowa", "kansas", "kentucky",
+    "louisiana", "maine", "mississippi", "missouri",
+    "montana", "nebraska", "new hampshire", "new mexico",
+    "north dakota", "oklahoma", "rhode island",
+    "south dakota", "vermont", "west virginia", "wyoming",
     "seattle", "bellevue", "san francisco", "sunnyvale", "san jose",
     "los angeles", "long beach", "irvine", "san diego", "newark", "jersey city",
     "edison", "boston", "atlanta", "austin", "dallas", "houston", "chicago",
     "charlotte", "raleigh", "denver", "phoenix", "portland", "philadelphia",
     "stamford", "washington dc", "reston", "herndon", "mclean", "livingston",
 ]
+
+# 2-letter state abbreviations (CA, WA, TX, etc.) are intentionally NOT in
+# the list above, because plain substring matching on 2-letter codes causes
+# false positives -- "wa" matches inside "Waterloo", "ga"/"or" match inside
+# "Bangalore", "in"/"ia" match inside "INDIA". They're matched separately
+# below using a word-boundary regex, which only matches a standalone
+# 2-letter token (e.g. ", CA" or ", CA,"), not a substring inside a word.
+US_STATE_ABBR_REGEX = re.compile(
+    r"\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|IA|ID|IL|IN|KS|KY|LA|MA|MD|ME|MI"
+    r"|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT"
+    r"|VA|VT|WA|WI|WV|WY)\b"
+    # No IGNORECASE: state codes are always written uppercase in real
+    # postings. Case-insensitive matching caused "or" (the English word,
+    # e.g. "...AB, BC, or NS Only") to collide with "OR" (Oregon).
+)
 
 GLOBAL_REMOTE_BLOCKERS = [
     "worldwide", "global", "anywhere", "anywhere in the world", "emea", "apac",
@@ -280,25 +301,42 @@ def title_matches(title, department="", description=""):
 
 
 def location_status(location, description=""):
-    text = f"{location} {description}".lower()
-    location_text = (location or "").strip()
+    """Whitelist approach: only accept a posting as US-based if the
+    LOCATION FIELD ITSELF (never the job description) contains a clear
+    US indicator. Everything else defaults to non_us.
 
-    if any(blocker in text for blocker in GLOBAL_REMOTE_BLOCKERS):
+    This intentionally ignores `description` entirely. The previous
+    version checked location+description together and treated any
+    mention of "United States" as an override -- but job descriptions
+    almost always contain generic EEO/legal boilerplate mentioning
+    "United States" regardless of the actual job location, which let
+    non-US postings (India, Canada, Brazil, Belgium, etc.) leak through
+    the filter. Relying only on the location field, which is a
+    company-curated structured field, is far more reliable.
+    """
+    location_text = (location or "").strip()
+    loc_lower = location_text.lower()
+
+    # A handful of well-known non-US cities whose country-code suffix
+    # collides with a US state abbreviation (e.g. "Herzliya, IL" means
+    # Israel, not Illinois; "Waterloo, ON" means Ontario, not Oregon).
+    # Checked first so they can't be misread as US by the regex below.
+    known_non_us_cities = [
+        "herzliya", "tel aviv", "ra'anana", "raanana", "netanya",
+        "waterloo, on", "toronto, on", "ottawa, on",
+    ]
+    if any(city in loc_lower for city in known_non_us_cities):
         return "non_us"
 
-    if any(place in text for place in NON_US):
-        if not any(us in text for us in ["united states", "usa", "u.s.", " us "]):
-            return "non_us"
+    if any(blocker in loc_lower for blocker in GLOBAL_REMOTE_BLOCKERS):
+        return "non_us"
 
-    if any(us_location in text for us_location in US_LOCATION_KEYWORDS):
-        if "remote" in text:
+    if any(us_location in loc_lower for us_location in US_LOCATION_KEYWORDS):
+        if "remote" in loc_lower:
             return "us_remote"
         return "us"
 
-    if re.search(
-        r"\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|IA|ID|IL|IN|KS|KY|LA|MA|MD|ME|MI|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VA|VT|WA|WI|WV|WY)\b",
-        location_text,
-    ):
+    if US_STATE_ABBR_REGEX.search(location_text):
         return "us"
 
     return "non_us"
@@ -398,87 +436,93 @@ def scrape_greenhouse(slug):
     return buckets
 
 
-def scrape_lever(slug):
+def scrape_smartrecruiters(company_identifier):
     start = time.time()
     buckets = {"matched": [], "review": [], "blocked": [], "skipped": []}
     try:
-        data = get_json(f"https://api.lever.co/v0/postings/{slug}?mode=json")
-        jobs = data if isinstance(data, list) else []
+        jobs = []
+        offset, limit = 0, 100
+        while True:
+            data = get_json(
+                f"https://api.smartrecruiters.com/v1/companies/{company_identifier}"
+                f"/postings?limit={limit}&offset={offset}"
+            )
+            content = data.get("content", []) or []
+            jobs.extend(content)
+            total = int(data.get("totalFound", 0) or 0)
+            offset += limit
+            if not content or offset >= total:
+                break
+            time.sleep(0.2)
+
         for raw in jobs:
-            categories = raw.get("categories", {}) or {}
-            location = categories.get("location", "") or categories.get("allLocations", "")
-            if isinstance(location, list):
-                location = ", ".join(location)
-            description = " ".join([
-                raw.get("descriptionPlain", "") or "",
-                raw.get("additionalPlain", "") or "",
-            ])
-            posted = ""
-            if raw.get("createdAt"):
-                posted = datetime.fromtimestamp(
-                    raw["createdAt"] / 1000, tz=timezone.utc
-                ).strftime("%Y-%m-%d")
+            loc = raw.get("location", {}) or {}
+            location_parts = [
+                loc.get("city", ""), loc.get("region", ""), loc.get("country", ""),
+            ]
+            location = ", ".join(p for p in location_parts if p)
+            if loc.get("remote"):
+                location = (location + " - Remote").strip(" -")
+            department = (raw.get("department", {}) or {}).get("label", "")
+            posting_id = raw.get("id", "")
+            # NOTE: this list-level endpoint does not return full job
+            # description text -- only /postings/{id} does, which would
+            # require one extra request per job. Sponsorship detection
+            # will mostly show "unknown" for this source as a result;
+            # that's an accepted tradeoff, not a bug.
             job = build_job(
-                "Lever", slug.replace("-", " ").title(), raw.get("id", ""),
-                raw.get("text", ""), location,
-                categories.get("team", "") or categories.get("department", ""),
-                raw.get("hostedUrl", ""), posted, description,
-                categories.get("commitment", ""),
+                "SmartRecruiters",
+                company_identifier.replace("-", " ").title(),
+                posting_id,
+                raw.get("name", ""),
+                location,
+                department,
+                raw.get("ref", "") or f"https://jobs.smartrecruiters.com/{company_identifier}/{posting_id}",
+                (raw.get("releasedDate", "") or "")[:10],
+                "",
             )
             add_routed(job, buckets)
-        HEALTH.append(["Lever", slug, "ok", len(jobs), len(buckets["matched"]),
-                       len(buckets["blocked"]), len(buckets["skipped"]),
-                       round(time.time() - start, 2), ""])
+        HEALTH.append(["SmartRecruiters", company_identifier, "ok", len(jobs),
+                       len(buckets["matched"]), len(buckets["blocked"]),
+                       len(buckets["skipped"]), round(time.time() - start, 2), ""])
     except Exception as exc:
-        HEALTH.append(["Lever", slug, "error", 0, 0, 0, 0,
+        HEALTH.append(["SmartRecruiters", company_identifier, "error", 0, 0, 0, 0,
                        round(time.time() - start, 2), str(exc)])
     return buckets
 
 
-def scrape_ashby(slug):
+def scrape_workable(slug):
     start = time.time()
     buckets = {"matched": [], "review": [], "blocked": [], "skipped": []}
-    payload = {
-        "operationName": "ApiJobBoardWithTeams",
-        "variables": {"organizationHostedJobsPageName": slug},
-        "query": """
-        query ApiJobBoardWithTeams($organizationHostedJobsPageName: String!) {
-          jobBoard: jobBoardWithTeams(
-            organizationHostedJobsPageName: $organizationHostedJobsPageName
-          ) {
-            jobPostings {
-              id title locationName jobUrl isRemote publishedDate team { name }
-            }
-          }
-        }
-        """,
-    }
     try:
-        data = post_json(
-            "https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobBoardWithTeams",
-            payload,
-            {
-                "Origin": "https://jobs.ashbyhq.com",
-                "Referer": f"https://jobs.ashbyhq.com/{slug}",
-            },
-        )
-        jobs = data.get("data", {}).get("jobBoard", {}).get("jobPostings", []) or []
+        data = get_json(f"https://www.workable.com/api/accounts/{slug}?details=true")
+        jobs = data.get("jobs", []) or []
         for raw in jobs:
-            location = raw.get("locationName", "") or ("Remote" if raw.get("isRemote") else "")
+            loc = raw.get("location", {}) or {}
+            location = loc.get("location_str", "") or ", ".join(
+                p for p in [loc.get("city", ""), loc.get("region", ""), loc.get("country", "")]
+                if p
+            )
+            if raw.get("telecommuting"):
+                location = (location + " - Remote").strip(" -")
             job = build_job(
-                "Ashby", slug.replace("-", " ").title(), raw.get("id", ""),
-                raw.get("title", ""), location,
-                (raw.get("team") or {}).get("name", ""),
-                raw.get("jobUrl", ""), (raw.get("publishedDate", "") or "")[:10],
+                "Workable", slug.replace("-", " ").title(),
+                raw.get("shortcode", "") or raw.get("id", ""),
+                raw.get("title", "") or raw.get("name", ""),
+                location,
+                raw.get("department", "") or "",
+                raw.get("url", "") or raw.get("shortlink", ""),
+                (raw.get("published_on", "") or raw.get("created_at", "") or "")[:10],
+                raw.get("description", "") or "",
             )
             add_routed(job, buckets)
-        status = "ok" if jobs else "empty_or_blocked"
-        HEALTH.append(["Ashby", slug, status, len(jobs), len(buckets["matched"]),
+        status = "ok" if jobs else "empty"
+        HEALTH.append(["Workable", slug, status, len(jobs), len(buckets["matched"]),
                        len(buckets["blocked"]), len(buckets["skipped"]),
                        round(time.time() - start, 2),
                        "" if jobs else "Zero postings returned"])
     except Exception as exc:
-        HEALTH.append(["Ashby", slug, "error", 0, 0, 0, 0,
+        HEALTH.append(["Workable", slug, "error", 0, 0, 0, 0,
                        round(time.time() - start, 2), str(exc)])
     return buckets
 
@@ -826,13 +870,14 @@ def main():
         merge(scrape_greenhouse(slug), buckets)
         time.sleep(0.15)
 
-    print(f"Scanning Lever: {len(LEVER_SLUGS)} companies")
-    for slug in LEVER_SLUGS:
-        merge(scrape_lever(slug), buckets)
+    print(f"Scanning SmartRecruiters: {len(SMARTRECRUITERS_SLUGS)} companies")
+    for slug in SMARTRECRUITERS_SLUGS:
+        merge(scrape_smartrecruiters(slug), buckets)
+        time.sleep(0.15)
 
-    print(f"Scanning Ashby: {len(ASHBY_SLUGS)} companies")
-    for slug in ASHBY_SLUGS:
-        merge(scrape_ashby(slug), buckets)
+    print(f"Scanning Workable: {len(WORKABLE_SLUGS)} companies")
+    for slug in WORKABLE_SLUGS:
+        merge(scrape_workable(slug), buckets)
 
     print(f"Scanning Workday Direct: {len(WORKDAY_DIRECT)} companies")
     for company in WORKDAY_DIRECT:
