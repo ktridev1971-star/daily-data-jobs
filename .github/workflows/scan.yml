@@ -1,8 +1,19 @@
 name: Daily Data Jobs Scan
 
+# GitHub Actions cron always runs in UTC and does NOT auto-adjust for
+# Daylight Saving Time. EST (winter) = UTC-5. EDT (summer) = UTC-4.
+# The 4 lines below cover 8:00 AM and 3:00 PM Eastern in BOTH seasons,
+# so you'll always get both target times hit correctly year-round --
+# you'll just also get 2 "off-season" runs per day that don't match
+# your actual clock time. If you'd rather have exactly 2 runs/day and
+# don't mind manually flipping this twice a year, delete whichever
+# pair doesn't apply to the current season.
 on:
   schedule:
-    - cron: "17 12 * * 1-5"
+    - cron: "0 13 * * 1-5"   # 8:00 AM EST (winter, UTC-5)
+    - cron: "0 12 * * 1-5"   # 8:00 AM EDT (summer, UTC-4)
+    - cron: "0 20 * * 1-5"   # 3:00 PM EST (winter, UTC-5)
+    - cron: "0 19 * * 1-5"   # 3:00 PM EDT (summer, UTC-4)
   workflow_dispatch: {}
 
 jobs:

@@ -37,23 +37,44 @@ from openpyxl.utils import get_column_letter
 RESULTS_DIR = Path("results")
 SEEN_FILE = RESULTS_DIR / "seen.json"
 
-# Data-heavy companies known to run public Greenhouse boards.
-# Add/remove slugs freely -- these are just a starting point.
+# Data-heavy + general tech companies known to run public Greenhouse boards.
+# NOT ALL SLUGS ARE GUARANTEED CORRECT -- some companies may have moved ATS,
+# renamed their slug, or never used Greenhouse at all. Run the script, check
+# the "Scanner Health" tab for 404 errors, and delete/fix the broken ones.
+# This pruning step is a normal part of maintaining this list, not a bug.
 PRIORITY_GREENHOUSE = [
-    "snowflake", "databricks", "dbtlabs", "airbyte", "fivetran",
-    "confluent", "segment", "amplitude", "mixpanel", "mongodb",
-    "elastic", "starburstdata", "monte-carlo-data", "hex",
-    "coalesce", "census", "hightouch", "grafanalabs", "gitlab",
+    "databricks", "fivetran", "amplitude", "mixpanel", "mongodb",
+    "elastic", "hightouch", "grafanalabs", "gitlab", "confluent",
+    "doordash", "instacart", "pinterest", "affirm", "brex", "plaid",
+    "airtable", "asana", "discord", "dropbox", "duolingo", "figma",
+    "gusto", "hashicorp", "intercom", "lyft", "peloton", "reddit",
+    "robinhood", "squarespace", "twilio", "zendesk", "coinbase",
+    "cloudflare", "datadog", "docker", "flexport", "honeycombio",
+    "okta", "pagerduty", "postmanlabs", "samsara", "stripe",
+    "wealthfront", "webflow", "zapier", "benchling", "calendly",
+    "carta", "checkr", "clari", "coursera", "digitalocean",
+    "fastly", "faire", "front", "gong", "grammarly", "handshake",
+    "harness", "hubspot", "iterable", "klaviyo", "lattice",
+    "launchdarkly", "mailchimp", "marqeta", "medallia", "miro",
+    "monte-carlo-data", "mural", "netlify", "nextdoor", "opsgenie",
+    "outreach", "patreon", "pendo", "procore", "qualtrics", "quora",
+    "redis", "rippling", "roblox", "rubrik", "samsclub", "seatgeek",
+    "servicetitan", "sigmacomputing", "smartsheet", "sofi",
+    "spring-health", "strava", "sumologic", "talkdesk", "thumbtack",
+    "toast", "unity", "vanta", "verkada", "vimeo", "wish",
+    "workiva", "yelp", "zillow", "zscaler",
 ]
 
 LEVER_SLUGS = [
     # Fill in Lever-hosted data companies as you find them, e.g. "ro"
+    "attentive", "netflix", "epicgames", "eventbrite", "cedar",
 ]
 
 ASHBY_SLUGS = [
     "openai", "anthropic", "notion", "perplexity", "ramp",
     "posthog", "vercel", "retool", "supabase", "modal",
     "sourcegraph", "cohere", "huggingface", "scale-ai",
+    "coreweave", "runway", "cursor", "replit", "chime", "robinhood",
 ]
 
 WORKDAY_DIRECT = [
@@ -248,8 +269,12 @@ def title_matches(title, department="", description=""):
     if any(word in t for word in TITLE_INCLUDE):
         return True
 
-    if any(x in t for x in ["software engineer", "systems engineer", "analyst"]):
-        return sum(word in combined for word in TECH_KEYWORDS) >= 2
+    # Only fall back to keyword scoring for genuinely ambiguous titles
+    # (plain "analyst") -- NOT "software engineer" or "systems engineer",
+    # since those show up constantly with unrelated tech stacks and were
+    # causing false positives (generic backend/infra roles slipping in).
+    if t.strip() == "analyst" or "data analyst" in combined:
+        return sum(word in combined for word in TECH_KEYWORDS) >= 3
 
     return False
 
@@ -643,6 +668,43 @@ def write_jobs(ws, title, jobs, seen, fill=None):
     format_sheet(ws)
 
 
+def write_all_roles(ws, jobs, seen):
+    """One combined view of every role that passed title+location filters,
+    regardless of sponsorship status -- so sponsoring and non-sponsoring
+    companies are visible side by side with a status column to sort/filter by.
+    """
+    ws.title = "All Roles (Any Sponsorship)"
+    ws.append([
+        "New", "Title", "Company", "Location", "Department", "ATS",
+        "Posted", "Sponsorship Status", "Sponsorship Detail",
+        "First Seen", "Apply",
+    ])
+    sponsorship_fill = {
+        "eligible": GREEN_FILL,
+        "unknown": None,
+        "review_required": YELLOW_FILL,
+        "blocked": RED_FILL,
+    }
+    for job in jobs:
+        ws.append([
+            "YES" if job.get("is_new") else "",
+            job["title"], job["company"], job["location"],
+            job["department"], job["ats"], job["posted"],
+            job["sponsorship_status"], job["sponsorship_reason"],
+            seen.get(job["id"], ""), "Apply",
+        ])
+        row = ws.max_row
+        link = ws.cell(row=row, column=11)
+        if job["url"]:
+            link.hyperlink = job["url"]
+            link.style = "Hyperlink"
+        fill = sponsorship_fill.get(job["sponsorship_status"])
+        if fill:
+            for cell in ws[row]:
+                cell.fill = fill
+    format_sheet(ws)
+
+
 def write_skipped(ws, jobs):
     ws.title = "Skipped Roles"
     ws.append(["Title", "Company", "Location", "Department", "ATS", "Reason", "Apply"])
@@ -684,6 +746,14 @@ def write_counts(ws, title, jobs, field):
 def write_excel(path, run_time, new_jobs, all_jobs, review, blocked, skipped, seen):
     wb = openpyxl.Workbook()
     write_jobs(wb.active, "New Jobs", new_jobs, seen, GREEN_FILL)
+
+    combined = sorted(
+        all_jobs + review + blocked,
+        key=lambda job: (job["posted"], job["company"], job["title"]),
+        reverse=True,
+    )
+    write_all_roles(wb.create_sheet(), combined, seen)
+
     write_jobs(wb.create_sheet(), "All Open Matches", all_jobs, seen)
     write_jobs(wb.create_sheet(), "Sponsorship Review", review, seen, YELLOW_FILL)
     write_jobs(wb.create_sheet(), "Explicitly Blocked", blocked, seen, RED_FILL)
